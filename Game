@@ -1,0 +1,973 @@
+# =====================================================
+# TREASURE HUNT ULTIMATE + FULL SHOP SYSTEM
+# =====================================================
+
+import pygame
+import random
+import time
+import json
+import os
+
+pygame.init()
+pygame.mixer.init()
+
+# =====================================================
+# SETTINGS
+# =====================================================
+
+WIDTH = 1000
+HEIGHT = 900
+GRID_AREA = 700
+FPS = 60
+
+SAVE_FILE = "treasure_save.json"
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Treasure Hunt Ultimate")
+
+clock = pygame.time.Clock()
+
+# =====================================================
+# COLORS
+# =====================================================
+
+BLACK = (20, 20, 20)
+WHITE = (255, 255, 255)
+GRAY = (100, 100, 100)
+
+GREEN = (0, 255, 0)
+RED = (255, 60, 60)
+BLUE = (60, 120, 255)
+
+YELLOW = (255, 215, 0)
+PURPLE = (180, 0, 255)
+
+ORANGE = (255, 140, 0)
+CYAN = (0, 255, 255)
+
+# =====================================================
+# FONTS
+# =====================================================
+
+font = pygame.font.SysFont(None, 40)
+small_font = pygame.font.SysFont(None, 28)
+big_font = pygame.font.SysFont(None, 70)
+
+# =====================================================
+# SOUNDS
+# =====================================================
+
+try:
+    found_sound = pygame.mixer.Sound("found.wav")
+    miss_sound = pygame.mixer.Sound("miss.wav")
+    explosion_sound = pygame.mixer.Sound("explosion.wav")
+except:
+    found_sound = None
+    miss_sound = None
+    explosion_sound = None
+
+# =====================================================
+# GAME VARIABLES
+# =====================================================
+
+score = 0
+coins = 0
+
+level = 1
+
+time_limit = 45
+start_time = time.time()
+
+message = ""
+message_color = WHITE
+
+game_over = False
+
+click_limit = 20
+clicks_left = 20
+
+# Gadgets
+radars = 0
+bombs = 0
+mega_scans = 0
+
+# Shop
+shop_open = False
+
+# Grid
+rows = 4
+cols = 4
+
+square_size = GRID_AREA // rows
+
+# Effects
+particles = []
+
+# =====================================================
+# SHOP ITEMS
+# =====================================================
+
+shop_items = [
+    {
+        "name": "Radar",
+        "cost": 25,
+        "key": "radar"
+    },
+    {
+        "name": "Bomb",
+        "cost": 50,
+        "key": "bomb"
+    },
+    {
+        "name": "Mega Scan",
+        "cost": 80,
+        "key": "mega"
+    },
+    {
+        "name": "+10 Clicks",
+        "cost": 40,
+        "key": "clicks"
+    },
+    {
+        "name": "+15 Seconds",
+        "cost": 60,
+        "key": "time"
+    }
+]
+
+# =====================================================
+# BUTTONS
+# =====================================================
+
+restart_button = pygame.Rect(720, 780, 220, 50)
+
+# =====================================================
+# SAVE / LOAD
+# =====================================================
+
+def save_game():
+
+    data = {
+        "coins": coins
+    }
+
+    with open(SAVE_FILE, "w") as file:
+        json.dump(data, file)
+
+
+def load_game():
+
+    global coins
+
+    if os.path.exists(SAVE_FILE):
+
+        with open(SAVE_FILE, "r") as file:
+
+            data = json.load(file)
+
+            coins = data.get("coins", 0)
+
+load_game()
+
+# =====================================================
+# PARTICLES
+# =====================================================
+
+def create_particles(x, y, color):
+
+    for _ in range(20):
+
+        particles.append({
+            "x": x,
+            "y": y,
+            "dx": random.uniform(-4, 4),
+            "dy": random.uniform(-4, 4),
+            "life": 30,
+            "color": color
+        })
+
+def update_particles():
+
+    for particle in particles[:]:
+
+        particle["x"] += particle["dx"]
+        particle["y"] += particle["dy"]
+
+        particle["life"] -= 1
+
+        if particle["life"] <= 0:
+            particles.remove(particle)
+
+def draw_particles():
+
+    for particle in particles:
+
+        pygame.draw.circle(
+            screen,
+            particle["color"],
+            (int(particle["x"]), int(particle["y"])),
+            4
+        )
+
+# =====================================================
+# GRID SYSTEM
+# =====================================================
+
+def get_grid_size(level):
+
+    if level < 4:
+        return 4
+
+    elif level < 8:
+        return 5
+
+    elif level < 12:
+        return 6
+
+    elif level < 16:
+        return 7
+
+    else:
+        return 8
+
+def get_treasure_count(level, total):
+
+    if level < 3:
+        return 2
+
+    elif level < 6:
+        return 3
+
+    elif level < 10:
+        return 4
+
+    else:
+        return min(5 + level // 5, total // 5)
+
+def get_click_limit(level, total):
+
+    if level < 4:
+        return total
+
+    elif level < 8:
+        return int(total * 0.80)
+
+    elif level < 12:
+        return int(total * 0.70)
+
+    else:
+        return int(total * 0.60)
+
+def create_grid(rows, cols):
+
+    squares = []
+
+    global square_size
+
+    square_size = GRID_AREA // rows
+
+    for row in range(rows):
+
+        for col in range(cols):
+
+            rect = pygame.Rect(
+                col * square_size,
+                row * square_size,
+                square_size,
+                square_size
+            )
+
+            trap = False
+
+            if level >= 6:
+                trap = random.random() < 0.08
+
+            squares.append({
+                "rect": rect,
+                "state": "hidden",
+                "row": row,
+                "col": col,
+                "trap": trap
+            })
+
+    return squares
+
+def new_level(level):
+
+    global rows
+    global cols
+
+    global click_limit
+    global clicks_left
+
+    global radars
+    global bombs
+    global mega_scans
+
+    rows = get_grid_size(level)
+    cols = rows
+
+    squares = create_grid(rows, cols)
+
+    total = len(squares)
+
+    treasure_count = get_treasure_count(level, total)
+
+    treasure_indexes = random.sample(
+        range(total),
+        treasure_count
+    )
+
+    click_limit = get_click_limit(level, total)
+
+    clicks_left = click_limit
+
+    # Progressive gadgets
+
+    if level % 5 == 0:
+        radars += 1
+
+    if level % 8 == 0:
+        bombs += 1
+
+    if level % 12 == 0:
+        mega_scans += 1
+
+    return squares, treasure_indexes
+
+# =====================================================
+# RESET
+# =====================================================
+
+def reset_game():
+
+    global score
+    global level
+    global start_time
+
+    global message
+    global message_color
+
+    global game_over
+
+    global radars
+    global bombs
+    global mega_scans
+
+    score = 0
+    level = 1
+
+    start_time = time.time()
+
+    message = ""
+    message_color = WHITE
+
+    game_over = False
+
+    radars = 0
+    bombs = 0
+    mega_scans = 0
+
+    return new_level(level)
+
+# =====================================================
+# SHOP SYSTEM
+# =====================================================
+
+def buy_item(item_key):
+
+    global coins
+    global radars
+    global bombs
+    global mega_scans
+    global clicks_left
+    global time_limit
+    global message
+    global message_color
+
+    for item in shop_items:
+
+        if item["key"] == item_key:
+
+            if coins < item["cost"]:
+
+                message = "NOT ENOUGH COINS"
+                message_color = RED
+
+                return
+
+            coins -= item["cost"]
+
+            if item_key == "radar":
+
+                radars += 1
+
+                message = "BOUGHT RADAR"
+                message_color = PURPLE
+
+            elif item_key == "bomb":
+
+                bombs += 1
+
+                message = "BOUGHT BOMB"
+                message_color = ORANGE
+
+            elif item_key == "mega":
+
+                mega_scans += 1
+
+                message = "BOUGHT MEGA SCAN"
+                message_color = CYAN
+
+            elif item_key == "clicks":
+
+                clicks_left += 10
+
+                message = "+10 CLICKS"
+                message_color = GREEN
+
+            elif item_key == "time":
+
+                time_limit += 15
+
+                message = "+15 SECONDS"
+                message_color = YELLOW
+
+            return
+
+# =====================================================
+# GADGETS
+# =====================================================
+
+def use_radar():
+
+    global radars
+    global message
+    global message_color
+
+    if radars <= 0:
+        return
+
+    hidden = [
+        i for i in treasure_indexes
+        if squares[i]["state"] == "hidden"
+    ]
+
+    if hidden:
+
+        chosen = random.choice(hidden)
+
+        squares[chosen]["state"] = "treasure"
+
+        radars -= 1
+
+        message = "RADAR USED"
+        message_color = PURPLE
+
+def use_mega_scan():
+
+    global mega_scans
+    global message
+    global message_color
+
+    if mega_scans <= 0:
+        return
+
+    mega_scans -= 1
+
+    for square in squares:
+
+        if square["state"] == "hidden":
+
+            if random.random() < 0.25:
+                square["state"] = "miss"
+
+    message = "MEGA SCAN"
+    message_color = CYAN
+
+def use_bomb(mouse_pos):
+
+    global bombs
+    global message
+    global message_color
+
+    if bombs <= 0:
+        return
+
+    bombs -= 1
+
+    if explosion_sound:
+        explosion_sound.play()
+
+    for square in squares:
+
+        if square["rect"].collidepoint(mouse_pos):
+
+            row = square["row"]
+            col = square["col"]
+
+            for sq in squares:
+
+                if (
+                    abs(sq["row"] - row) <= 1 and
+                    abs(sq["col"] - col) <= 1
+                ):
+
+                    if sq["state"] == "hidden":
+
+                        sq["state"] = "miss"
+
+                        create_particles(
+                            sq["rect"].centerx,
+                            sq["rect"].centery,
+                            ORANGE
+                        )
+
+            break
+
+    message = "BOMB USED"
+    message_color = ORANGE
+
+# =====================================================
+# START
+# =====================================================
+
+squares, treasure_indexes = new_level(level)
+
+running = True
+
+# =====================================================
+# MAIN LOOP
+# =====================================================
+
+while running:
+
+    clock.tick(FPS)
+
+    screen.fill(BLACK)
+
+    elapsed = int(time.time() - start_time)
+
+    remaining = max(0, time_limit - elapsed)
+
+    # =================================================
+    # EVENTS
+    # =================================================
+
+    for event in pygame.event.get():
+
+        if event.type == pygame.QUIT:
+
+            save_game()
+
+            running = False
+
+        # =================================================
+        # KEYS
+        # =================================================
+
+        if event.type == pygame.KEYDOWN:
+
+            if event.key == pygame.K_r:
+                use_radar()
+
+            if event.key == pygame.K_m:
+                use_mega_scan()
+
+            if event.key == pygame.K_p:
+                shop_open = not shop_open
+
+        # =================================================
+        # MOUSE
+        # =================================================
+
+        if event.type == pygame.MOUSEBUTTONDOWN:
+
+            mouse_pos = pygame.mouse.get_pos()
+
+            # Restart
+
+            if restart_button.collidepoint(mouse_pos):
+
+                squares, treasure_indexes = reset_game()
+
+            if game_over:
+                continue
+
+            # SHOP CLICKING
+
+            if shop_open:
+
+                for index, item in enumerate(shop_items):
+
+                    button_rect = pygame.Rect(
+                        720,
+                        560 + index * 55,
+                        240,
+                        45
+                    )
+
+                    if button_rect.collidepoint(mouse_pos):
+
+                        buy_item(item["key"])
+
+            # Bomb
+
+            if pygame.key.get_pressed()[pygame.K_b]:
+
+                use_bomb(mouse_pos)
+
+                continue
+
+            # =================================================
+            # GRID CLICKS
+            # =================================================
+
+            for i, square in enumerate(squares):
+
+                if (
+                    square["state"] == "hidden" and
+                    square["rect"].collidepoint(mouse_pos)
+                ):
+
+                    clicks_left -= 1
+
+                    center_x = square["rect"].centerx
+                    center_y = square["rect"].centery
+
+                    # TREASURE
+
+                    if i in treasure_indexes:
+
+                        square["state"] = "treasure"
+
+                        treasure_indexes.remove(i)
+
+                        score += 10
+                        coins += 5
+
+                        create_particles(
+                            center_x,
+                            center_y,
+                            YELLOW
+                        )
+
+                        if found_sound:
+                            found_sound.play()
+
+                        message = "TREASURE FOUND"
+                        message_color = GREEN
+
+                        # LEVEL COMPLETE
+
+                        if len(treasure_indexes) == 0:
+
+                            level += 1
+
+                            start_time = time.time()
+
+                            message = f"LEVEL {level}"
+                            message_color = CYAN
+
+                            squares, treasure_indexes = new_level(level)
+
+                    # TRAP
+
+                    elif square["trap"]:
+
+                        square["state"] = "miss"
+
+                        clicks_left -= 2
+
+                        create_particles(
+                            center_x,
+                            center_y,
+                            RED
+                        )
+
+                        message = "TRAP!"
+                        message_color = RED
+
+                    # MISS
+
+                    else:
+
+                        square["state"] = "miss"
+
+                        create_particles(
+                            center_x,
+                            center_y,
+                            RED
+                        )
+
+                        if miss_sound:
+                            miss_sound.play()
+
+                        message = "MISS"
+                        message_color = RED
+
+                    break
+
+    # =================================================
+    # GAME OVER
+    # =================================================
+
+    if remaining <= 0:
+
+        game_over = True
+
+        message = "TIME UP"
+        message_color = RED
+
+    if clicks_left <= 0:
+
+        game_over = True
+
+        message = "OUT OF CLICKS"
+        message_color = RED
+
+    # =================================================
+    # PARTICLES
+    # =================================================
+
+    update_particles()
+
+    # =================================================
+    # DRAW GRID
+    # =================================================
+
+    for square in squares:
+
+        color = GRAY
+
+        if square["state"] == "miss":
+            color = RED
+
+        elif square["state"] == "treasure":
+            color = YELLOW
+
+        pygame.draw.rect(
+            screen,
+            color,
+            square["rect"]
+        )
+
+        pygame.draw.rect(
+            screen,
+            WHITE,
+            square["rect"],
+            2
+        )
+
+    # =================================================
+    # DRAW PARTICLES
+    # =================================================
+
+    draw_particles()
+
+    # =================================================
+    # UI
+    # =================================================
+
+    ui_x = 730
+
+    screen.blit(
+        font.render(f"Score: {score}", True, WHITE),
+        (ui_x, 40)
+    )
+
+    screen.blit(
+        font.render(f"Coins: {coins}", True, YELLOW),
+        (ui_x, 90)
+    )
+
+    screen.blit(
+        font.render(f"Level: {level}", True, WHITE),
+        (ui_x, 140)
+    )
+
+    screen.blit(
+        font.render(f"Time: {remaining}", True, WHITE),
+        (ui_x, 190)
+    )
+
+    screen.blit(
+        font.render(f"Clicks: {clicks_left}", True, WHITE),
+        (ui_x, 240)
+    )
+
+    # Gadgets
+
+    screen.blit(
+        small_font.render(f"Radar (R): {radars}", True, PURPLE),
+        (ui_x, 330)
+    )
+
+    screen.blit(
+        small_font.render(f"Bomb (Hold B): {bombs}", True, ORANGE),
+        (ui_x, 370)
+    )
+
+    screen.blit(
+        small_font.render(f"Mega Scan (M): {mega_scans}", True, CYAN),
+        (ui_x, 410)
+    )
+
+    # Message
+
+    screen.blit(
+        small_font.render(message, True, message_color),
+        (ui_x, 470)
+    )
+
+    # Controls
+
+    controls = [
+        "CONTROLS",
+        "Click = Open",
+        "R = Radar",
+        "B + Click = Bomb",
+        "M = Mega Scan",
+        "P = Shop"
+    ]
+
+    y = 520
+
+    for line in controls:
+
+        text = small_font.render(line, True, WHITE)
+
+        screen.blit(text, (ui_x, y))
+
+        y += 35
+
+    # =====================================================
+    # SHOP DRAWING
+    # =====================================================
+
+    if shop_open:
+
+        shop_panel = pygame.Rect(700, 500, 270, 320)
+
+        pygame.draw.rect(
+            screen,
+            (35, 35, 35),
+            shop_panel,
+            border_radius=12
+        )
+
+        pygame.draw.rect(
+            screen,
+            WHITE,
+            shop_panel,
+            3,
+            border_radius=12
+        )
+
+        title = font.render("SHOP (P)", True, YELLOW)
+
+        screen.blit(title, (735, 510))
+
+        for index, item in enumerate(shop_items):
+
+            button_rect = pygame.Rect(
+                720,
+                560 + index * 55,
+                240,
+                45
+            )
+
+            pygame.draw.rect(
+                screen,
+                BLUE,
+                button_rect,
+                border_radius=8
+            )
+
+            pygame.draw.rect(
+                screen,
+                WHITE,
+                button_rect,
+                2,
+                border_radius=8
+            )
+
+            item_text = small_font.render(
+                f"{item['name']} - {item['cost']}c",
+                True,
+                WHITE
+            )
+
+            screen.blit(
+                item_text,
+                (
+                    button_rect.x + 10,
+                    button_rect.y + 10
+                )
+            )
+
+    # Restart
+
+    pygame.draw.rect(
+        screen,
+        BLUE,
+        restart_button,
+        border_radius=10
+    )
+
+    restart_text = font.render(
+        "RESTART",
+        True,
+        WHITE
+    )
+
+    screen.blit(
+        restart_text,
+        (restart_button.x + 35, restart_button.y + 10)
+    )
+
+    # =================================================
+    # GAME OVER SCREEN
+    # =================================================
+
+    if game_over:
+
+        overlay = pygame.Surface((WIDTH, HEIGHT))
+
+        overlay.set_alpha(180)
+
+        overlay.fill(BLACK)
+
+        screen.blit(overlay, (0, 0))
+
+        game_over_text = big_font.render(
+            "GAME OVER",
+            True,
+            RED
+        )
+
+        screen.blit(
+            game_over_text,
+            (
+                WIDTH // 2 - game_over_text.get_width() // 2,
+                HEIGHT // 2 - 100
+            )
+        )
+
+        final_score = font.render(
+            f"Final Score: {score}",
+            True,
+            WHITE
+        )
+
+        screen.blit(
+            final_score,
+            (
+                WIDTH // 2 - final_score.get_width() // 2,
+                HEIGHT // 2
+            )
+        )
+
+    pygame.display.flip()
+
+pygame.quit()
